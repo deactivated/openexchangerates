@@ -25,6 +25,32 @@ class OpenExchangeRatesClient(object):
         """Convenient constructor"""
         self.client = requests.Session()
         self.client.params.update({'app_id': api_key})
+        self.etags = {}
+
+    def request(self, endpoint, params=None):
+        """Submit a request using API keys"""
+        etag_key = "%s-%s" % (endpoint, params and sorted(params.items()))
+        etag = self.etags.get(etag_key)
+
+        try:
+            resp = self.client.get(endpoint, params=params,
+                                   headers={
+                                       "If-None-Match": etag and etag[0],
+                                       "If-Modified-Since": etag and etag[1]
+                                   })
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise OpenExchangeRatesClientException(e)
+
+        if resp.status_code == 304:
+            return etag[2]
+
+        result = resp.json(parse_int=decimal.Decimal,
+                           parse_float=decimal.Decimal)
+        self.etags[etag_key] = (resp.headers.get('etag'),
+                                resp.headers.get('date'),
+                                result)
+        return result
 
     def latest(self, base='USD'):
         """Fetches latest exchange rate data from service
@@ -45,14 +71,7 @@ class OpenExchangeRatesClient(object):
                 }
             }
         """
-        try:
-            resp = self.client.get(self.ENDPOINT_LATEST, params={'base': base})
-            resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            raise OpenExchangeRatesClientException(e)
-
-        return resp.json(parse_int=decimal.Decimal,
-                         parse_float=decimal.Decimal)
+        return self.request(self.ENDPOINT_LATEST, {"base": base})
 
     def currencies(self):
         """Fetches current currency data of the service
@@ -73,9 +92,4 @@ class OpenExchangeRatesClient(object):
             ...
         }
         """
-        try:
-            resp = self.client.get(self.ENDPOINT_CURRENCIES)
-        except requests.exceptions.RequestException as e:
-            raise OpenExchangeRatesClientException(e)
-
-        return resp.json()
+        return self.request(self.ENDPOINT_CURRENCIES)
